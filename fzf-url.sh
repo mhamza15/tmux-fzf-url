@@ -160,20 +160,20 @@ strip_ansi() {
     sed -E 's/\x1B\[[0-9;]*[mK]//g'
 }
 
-# rg_line extracts all matches for one pattern from one captured pane line.
-rg_line() {
-    local line="$1"
+# rg_matches prefixes matches with line and column so pattern passes can merge.
+rg_matches() {
+    local content="$1"
     local pattern="$2"
     local replacement="${3:-}"
 
     if (($# >= 3)); then
-        printf '%s\n' "$line" |
-            "$RG" --color=never --no-heading --no-line-number --only-matching --pcre2 \
+        printf '%s\n' "$content" |
+            "$RG" --color=never --no-heading --line-number --column --only-matching --pcre2 \
                 --replace "$replacement" "$pattern" ||
             true
     else
-        printf '%s\n' "$line" |
-            "$RG" --color=never --no-heading --no-line-number --only-matching --pcre2 \
+        printf '%s\n' "$content" |
+            "$RG" --color=never --no-heading --line-number --column --only-matching --pcre2 \
                 "$pattern" ||
             true
     fi
@@ -181,7 +181,7 @@ rg_line() {
 
 # rg_extract keeps pane line order while using per-pattern URL normalization.
 rg_extract() {
-    local custom_pat custom_sub line
+    local content custom_pat custom_sub
 
     while (($# > 0)); do
         case "$1" in
@@ -201,21 +201,27 @@ rg_extract() {
         esac
     done
 
-    strip_ansi | while IFS= read -r line || [[ -n "$line" ]]; do
-        rg_line "$line" "$PAT_URL"
-        rg_line "$line" "$PAT_GIT" "$SUB_GIT"
-        rg_line "$line" "$PAT_WWW" "$SUB_WWW"
-        rg_line "$line" "$PAT_IP" "$SUB_IP"
-        rg_line "$line" "$PAT_GH" "$SUB_GH"
+    content="$(strip_ansi)"
 
+    {
+        rg_matches "$content" "$PAT_URL"
+        rg_matches "$content" "$PAT_GIT" "$SUB_GIT"
+        rg_matches "$content" "$PAT_WWW" "$SUB_WWW"
+        rg_matches "$content" "$PAT_IP" "$SUB_IP"
+        rg_matches "$content" "$PAT_GH" "$SUB_GH"
+
+        # Custom patterns use the same PCRE2 and replacement syntax as ripgrep.
         if [[ -n "$custom_pat" ]]; then
             if [[ -n "$custom_sub" ]]; then
-                rg_line "$line" "$custom_pat" "$custom_sub"
+                rg_matches "$content" "$custom_pat" "$custom_sub"
             else
-                rg_line "$line" "$custom_pat"
+                rg_matches "$content" "$custom_pat"
             fi
         fi
-    done | awk '$0 != "" && !seen[$0]++'
+    } |
+        sort -t: -k1,1n -k2,2n |
+        cut -d: -f3- |
+        awk '$0 != "" && !seen[$0]++'
 }
 
 get_copy_cmd() {
