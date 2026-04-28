@@ -57,9 +57,9 @@ sort_extracted_urls() {
 
         recency)
             if fzf_uses_reverse_layout "$fzf_options"; then
-                reverse_lines
+                awk '!seen[$0]++' | reverse_lines
             else
-                cat
+                awk '!seen[$0]++'
             fi
             ;;
 
@@ -165,6 +165,8 @@ ensure_xre() {
         [ "$current" = "$XRE_VERSION" ] && return 0
         local msg="upgrading xre to v${XRE_VERSION}"
     else
+        [ -w "$SCRIPT_DIR" ] || return 1
+
         local msg="installing xre v${XRE_VERSION}"
     fi
 
@@ -197,6 +199,56 @@ xre_extract() {
         "$@"
 }
 
+grep_extract() {
+    local content custom_pat custom_sub extras
+    local gh gits ips urls wwws
+
+    content="$(cat)"
+
+    while (($# > 0)); do
+        case "$1" in
+            -e)
+                custom_pat="${2:-}"
+                shift 2
+                ;;
+
+            -r)
+                custom_sub="${2:-}"
+                shift 2
+                ;;
+
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    urls=$(printf '%s\n' "$content" | grep -oE '(https?|ftp|file):/?//[-A-Za-z0-9+&@#/%?=~_|!:,.;]*[-A-Za-z0-9+&@#/%=~_|]')
+    wwws=$(printf '%s\n' "$content" | grep -oE '(http?s://)?www\.[a-zA-Z](-?[a-zA-Z0-9])+\.[a-zA-Z]{2,}(/\S+)*' | grep -vE '^https?://' | sed 's/^\(.*\)$/http:\/\/\1/')
+    ips=$(printf '%s\n' "$content" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(:[0-9]{1,5})?(/\S+)*' | sed 's/^\(.*\)$/http:\/\/\1/')
+    gits=$(printf '%s\n' "$content" | grep -oE '(ssh://)?git@\S*' | sed 's/:/\//g' | sed 's/^\(ssh\/\/\/\)\{0,1\}git@\(.*\)$/https:\/\/\2/')
+    gh=$(printf '%s\n' "$content" | grep -oE "['\"]([_A-Za-z0-9-]*/[_.A-Za-z0-9-]*)['\"]" | sed "s/['\"]//g" | sed 's#.#https://github.com/&#')
+
+    if [[ -n "$custom_pat" ]]; then
+        extras=$(printf '%s\n' "$content" | grep -oE "$custom_pat")
+
+        if [[ -n "$custom_sub" ]]; then
+            extras=$(printf '%s\n' "$extras" | sed "s#.*#${custom_sub}#")
+        fi
+    fi
+
+    printf '%s\n' "${urls[@]}" "${wwws[@]}" "${gh[@]}" "${ips[@]}" "${gits[@]}" "${extras[@]}" |
+        grep -v '^$'
+}
+
+extract_urls() {
+    if ensure_xre; then
+        xre_extract "$@"
+    else
+        grep_extract "$@"
+    fi
+}
+
 get_copy_cmd() {
     local custom="$1"
     if [[ -n "$custom" ]]; then
@@ -218,11 +270,6 @@ get_copy_cmd() {
 
 # Source guard: when testing, stop here and don't execute main logic
 [[ "${__FZF_URL_TESTING:-}" == 1 ]] && return 0 2>/dev/null || true
-
-if ! ensure_xre; then
-    tmux display 'tmux-fzf-url: xre is required but could not be installed. See https://github.com/wfxr/xre'
-    exit 1
-fi
 
 limit=$1
 custom_open=$2
@@ -253,7 +300,7 @@ fzf_options="$(get_fzf_options)"
 
 items=$(printf '%s\n' "$content" |
     sort_extraction_input "$sort_by" |
-    xre_extract "${custom_args[@]}" |
+    extract_urls "${custom_args[@]}" |
     sort_extracted_urls "$sort_by" "$fzf_options" |
     nl -w3 -s '  ')
 
