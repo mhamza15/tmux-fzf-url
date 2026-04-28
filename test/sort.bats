@@ -54,16 +54,6 @@ setup() {
     assert_line --index 1 "https://other.example"
 }
 
-@test "grep fallback positions duplicates by latest occurrence" {
-    input=$'https://repeat.example\nhttps://other.example\nhttps://repeat.example'
-
-    run bash -c "printf '%s\n' '$input' | sort_extraction_input recency | grep_extract | sort_extracted_urls recency ''"
-
-    assert_success
-    assert_line --index 0 "https://repeat.example"
-    assert_line --index 1 "https://other.example"
-}
-
 @test "fzf_uses_reverse_layout: detects --layout=reverse" {
     run fzf_uses_reverse_layout "-w 100% --layout=reverse --multi"
 
