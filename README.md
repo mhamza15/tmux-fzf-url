@@ -18,7 +18,7 @@ Prerequisites:
 * [`tmux`](https://github.com/tmux/tmux)
 * [`fzf`](https://github.com/junegunn/fzf)
 * [`bash`](https://www.gnu.org/software/bash/)
-* [`xre`](https://github.com/wfxr/xre) *(auto-installed on first use)*
+* [`ripgrep`](https://github.com/BurntSushi/ripgrep)
 
 **Install using [TPM](https://github.com/tmux-plugins/tpm)**
 
@@ -40,9 +40,9 @@ Then add the following line to your `~/.tmux.conf`:
 run-shell ~/.tmux/plugins/tmux-fzf-url/fzf-url.tmux
 ```
 
-**Legacy version (no `xre` dependency)**
+**Legacy version (grep extraction)**
 
-If you prefer the older version that uses `grep` instead of `xre`, pin to the `legacy` tag:
+If you prefer the older upstream version that uses `grep`, pin to the `legacy` tag:
 
 ``` tmux
 set -g @plugin 'wfxr/tmux-fzf-url#legacy'

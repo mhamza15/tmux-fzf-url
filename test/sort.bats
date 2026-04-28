@@ -47,11 +47,21 @@ setup() {
 @test "recency pipeline positions duplicates by latest occurrence" {
     input=$'https://repeat.example\nhttps://other.example\nhttps://repeat.example'
 
-    run bash -c "printf '%s\n' '$input' | sort_extraction_input recency | xre_extract | sort_extracted_urls recency ''"
+    run bash -c "printf '%s\n' '$input' | sort_extraction_input recency | rg_extract | sort_extracted_urls recency ''"
 
     assert_success
     assert_line --index 0 "https://repeat.example"
     assert_line --index 1 "https://other.example"
+}
+
+@test "recency pipeline preserves order across URL types" {
+    input=$'https://old.example\n10.0.0.1:8080'
+
+    run bash -c "printf '%s\n' '$input' | sort_extraction_input recency | rg_extract | sort_extracted_urls recency ''"
+
+    assert_success
+    assert_line --index 0 "http://10.0.0.1:8080"
+    assert_line --index 1 "https://old.example"
 }
 
 @test "fzf_uses_reverse_layout: detects --layout=reverse" {

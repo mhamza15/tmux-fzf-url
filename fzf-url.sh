@@ -5,9 +5,7 @@
 #    Email: wenxuangm@gmail.com
 #  Created: 2018-04-06 12:12
 #===============================================================================
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-XRE="$SCRIPT_DIR/bin/xre"
-XRE_VERSION="0.1.1"
+RG="${RG:-rg}"
 
 version_ge() {
     [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
@@ -34,7 +32,7 @@ fzf_uses_reverse_layout() {
     return 1
 }
 
-# sort_extraction_input lets xre keep the latest duplicate URL for recency.
+# sort_extraction_input lets extraction keep the latest duplicate URL for recency.
 sort_extraction_input() {
     local sort_by="$1"
 
@@ -57,9 +55,9 @@ sort_extracted_urls() {
 
         recency)
             if fzf_uses_reverse_layout "$fzf_options"; then
-                reverse_lines
+                awk '!seen[$0]++' | reverse_lines
             else
-                cat
+                awk '!seen[$0]++'
             fi
             ;;
 
@@ -138,7 +136,7 @@ SUB_GIT='https://$1/$2'
 #   www.example.com -> http://www.example.com
 #   www.example.com/path -> http://www.example.com/path
 read -r PAT_WWW <<'PATTERN'
-www\.[a-zA-Z](?:-?[a-zA-Z0-9])+\.[a-zA-Z]{2,}(?:/[^\s'"`]+)*
+(?<!https://)(?<!http://)(?<!ftp://)(?<!file://)www\.[a-zA-Z](?:-?[a-zA-Z0-9])+\.[a-zA-Z]{2,}(?:/[^\s'"`]+)*
 PATTERN
 SUB_WWW='http://$0'
 
@@ -158,43 +156,66 @@ read -r PAT_GH <<'PATTERN'
 PATTERN
 SUB_GH='https://github.com/$1'
 
-ensure_xre() {
-    if [ -x "$XRE" ]; then
-        local current
-        current="$("$XRE" --version 2>/dev/null | awk '{print $2}')"
-        [ "$current" = "$XRE_VERSION" ] && return 0
-        local msg="upgrading xre to v${XRE_VERSION}"
-    else
-        local msg="installing xre v${XRE_VERSION}"
-    fi
-
-    command -v curl &>/dev/null || { echo "tmux-fzf-url: 'curl' is required to install 'xre'" >&2; return 1; }
-
-    local install_cmd
-    printf -v install_cmd "curl -fsSL %q | bash -s -- -v %q -d %q" \
-        "https://raw.githubusercontent.com/wfxr/xre/v${XRE_VERSION}/install.sh" \
-        "v$XRE_VERSION" "$SCRIPT_DIR/bin"
-
-    if [ -n "$TMUX" ]; then
-        tmux display "tmux-fzf-url: ${msg}..."
-    else
-        echo "tmux-fzf-url: ${msg}..." >&2
-    fi
-    bash -c "$install_cmd" || {
-        echo "tmux-fzf-url: failed to install 'xre'" >&2
-        return 1
-    }
-    [ -x "$XRE" ]
+strip_ansi() {
+    sed -E 's/\x1B\[[0-9;]*[mK]//g'
 }
 
-xre_extract() {
-    "$XRE" --strip-ansi \
-        -e "$PAT_URL" \
-        -e "$PAT_GIT" -r "$SUB_GIT" \
-        -e "$PAT_WWW" -r "$SUB_WWW" \
-        -e "$PAT_IP"  -r "$SUB_IP" \
-        -e "$PAT_GH"  -r "$SUB_GH" \
-        "$@"
+# rg_line extracts all matches for one pattern from one captured pane line.
+rg_line() {
+    local line="$1"
+    local pattern="$2"
+    local replacement="${3:-}"
+
+    if (($# >= 3)); then
+        printf '%s\n' "$line" |
+            "$RG" --color=never --no-heading --no-line-number --only-matching --pcre2 \
+                --replace "$replacement" "$pattern" ||
+            true
+    else
+        printf '%s\n' "$line" |
+            "$RG" --color=never --no-heading --no-line-number --only-matching --pcre2 \
+                "$pattern" ||
+            true
+    fi
+}
+
+# rg_extract keeps pane line order while using per-pattern URL normalization.
+rg_extract() {
+    local custom_pat custom_sub line
+
+    while (($# > 0)); do
+        case "$1" in
+            -e)
+                custom_pat="${2:-}"
+                shift 2
+                ;;
+
+            -r)
+                custom_sub="${2:-}"
+                shift 2
+                ;;
+
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    strip_ansi | while IFS= read -r line || [[ -n "$line" ]]; do
+        rg_line "$line" "$PAT_URL"
+        rg_line "$line" "$PAT_GIT" "$SUB_GIT"
+        rg_line "$line" "$PAT_WWW" "$SUB_WWW"
+        rg_line "$line" "$PAT_IP" "$SUB_IP"
+        rg_line "$line" "$PAT_GH" "$SUB_GH"
+
+        if [[ -n "$custom_pat" ]]; then
+            if [[ -n "$custom_sub" ]]; then
+                rg_line "$line" "$custom_pat" "$custom_sub"
+            else
+                rg_line "$line" "$custom_pat"
+            fi
+        fi
+    done | awk '$0 != "" && !seen[$0]++'
 }
 
 get_copy_cmd() {
@@ -219,8 +240,8 @@ get_copy_cmd() {
 # Source guard: when testing, stop here and don't execute main logic
 [[ "${__FZF_URL_TESTING:-}" == 1 ]] && return 0 2>/dev/null || true
 
-if ! ensure_xre; then
-    tmux display 'tmux-fzf-url: xre is required but could not be installed. See https://github.com/wfxr/xre'
+if ! command -v "$RG" &>/dev/null; then
+    tmux display "tmux-fzf-url: ripgrep is required but was not found: $RG"
     exit 1
 fi
 
@@ -253,7 +274,7 @@ fzf_options="$(get_fzf_options)"
 
 items=$(printf '%s\n' "$content" |
     sort_extraction_input "$sort_by" |
-    xre_extract "${custom_args[@]}" |
+    rg_extract "${custom_args[@]}" |
     sort_extracted_urls "$sort_by" "$fzf_options" |
     nl -w3 -s '  ')
 
