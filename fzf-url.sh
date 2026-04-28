@@ -13,10 +13,82 @@ version_ge() {
     [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
 }
 
+# get_fzf_options keeps sorting and fzf invocation on the same option value.
+get_fzf_options() {
+    tmux show -gqv '@fzf-url-fzf-options'
+}
+
+# reverse_lines avoids tac so the plugin keeps the same behavior on macOS.
+reverse_lines() {
+    awk '{ lines[NR] = $0 } END { for (i = NR; i >= 1; i--) print lines[i] }'
+}
+
+# fzf_uses_reverse_layout detects layouts where the prompt is above the list.
+fzf_uses_reverse_layout() {
+    local fzf_options="$1"
+
+    [[ " $fzf_options " == *" --reverse "* ]] && return 0
+    [[ " $fzf_options " == *" --layout reverse "* ]] && return 0
+    [[ " $fzf_options " == *" --layout=reverse "* ]] && return 0
+
+    return 1
+}
+
+# sort_extraction_input lets xre keep the latest duplicate URL for recency.
+sort_extraction_input() {
+    local sort_by="$1"
+
+    if [[ "$sort_by" == "recency" ]]; then
+        reverse_lines
+    else
+        cat
+    fi
+}
+
+# sort_extracted_urls applies the requested display order after URL normalization.
+sort_extracted_urls() {
+    local sort_by="$1"
+    local fzf_options="$2"
+
+    case "$sort_by" in
+        alphabetical)
+            sort -u
+            ;;
+
+        recency)
+            if fzf_uses_reverse_layout "$fzf_options"; then
+                reverse_lines
+            else
+                cat
+            fi
+            ;;
+
+        *)
+            echo "tmux-fzf-url: unsupported @fzf-url-sort-by value: $sort_by" >&2
+            return 1
+            ;;
+    esac
+}
+
+# validate_sort_by rejects typos before they can create an empty fzf result.
+validate_sort_by() {
+    local sort_by="$1"
+
+    case "$sort_by" in
+        alphabetical | recency)
+            return 0
+            ;;
+
+        *)
+            return 1
+            ;;
+    esac
+}
+
 fzf_filter() {
     local fzf_version fzf_options copy_bind
     fzf_version="$(fzf --version 2>/dev/null | awk '{print $1}')"
-    fzf_options="$(tmux show -gqv '@fzf-url-fzf-options')"
+    fzf_options="$(get_fzf_options)"
     copy_bind="ctrl-y:execute-silent(printf '%s\n' {+} | awk '{print \$2}' | $_copy_cmd)"
 
     if [ -n "$fzf_options" ]; then
@@ -157,7 +229,13 @@ custom_open=$2
 custom_copy=$3
 custom_pat=$4
 custom_sub=$5
+sort_by=${6:-alphabetical}
 [[ -z "$limit" ]] && limit='screen'
+
+if ! validate_sort_by "$sort_by"; then
+    tmux display "tmux-fzf-url: unsupported @fzf-url-sort-by value: $sort_by"
+    exit 1
+fi
 
 if [[ $limit == 'screen' ]]; then
     content="$(tmux capture-pane -J -p -e)"
@@ -171,7 +249,14 @@ if [[ -n "$custom_pat" ]]; then
     [[ -n "$custom_sub" ]] && custom_args+=(-r "$custom_sub")
 fi
 
-items=$(printf '%s\n' "$content" | xre_extract "${custom_args[@]}" | nl -w3 -s '  ')
+fzf_options="$(get_fzf_options)"
+
+items=$(printf '%s\n' "$content" |
+    sort_extraction_input "$sort_by" |
+    xre_extract "${custom_args[@]}" |
+    sort_extracted_urls "$sort_by" "$fzf_options" |
+    nl -w3 -s '  ')
+
 [ -z "$items" ] && tmux display 'tmux-fzf-url: no URLs found' && exit
 
 _copy_cmd=$(get_copy_cmd "$custom_copy")
